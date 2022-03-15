@@ -26,13 +26,86 @@ namespace SFTPCSVPoC
             var data = File.ReadAllText(@"D:\Projects\SFTP\db_data.json");
             DataTable dataTable = (DataTable)JsonConvert.DeserializeObject(data, (typeof(DataTable)));
 
+            UploadDataTableUsingAppendByBlock(dataTable, 1);
             UploadDataTableUsingAppend(dataTable);
 
-            UploadTSVMemoryStreamInc();
+            //UploadTSVMemoryStreamInc();
 
-            UploadCompleteTSV();
+            //UploadCompleteTSV();
             
 
+        }
+        public static void UploadDataTableUsingAppendByBlock(DataTable dataTable, int blockSize = 1) //size in Mbs
+        {
+            blockSize *= 1024; //1024 * 1024;  //1 MB size
+            int total = 0;
+            int num = 0;
+
+            using (var sftpClient = new SftpClient(host, Port, username, password))
+            {
+                sftpClient.Connect();
+                StringBuilder fileContent = new StringBuilder();
+                using (StreamWriter writer = sftpClient.AppendText(workingdirectory + "TestFile.txt"))
+                {
+                    foreach (var col in dataTable.Columns)
+                    {
+                        fileContent.Append(col.ToString() + "\t");
+                    }
+
+                    fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
+                    // Add size of newlines
+                    //total += Environment.NewLine.Length;
+
+                    string line = fileContent.ToString();
+                    
+                    int length = line.Length;
+
+                    if (total + length >= blockSize)
+                    {
+                        // write the block size
+                        writer.Write(fileContent.ToString());
+                        num++;
+                        total = 0;
+                        fileContent.Clear();
+                    }
+
+                    else total += length;
+
+                    foreach (DataRow dr in dataTable.Rows)
+                    {
+                        foreach (var column in dr.ItemArray)
+                        {
+                            fileContent.Append("\"" + column.ToString() + "\"\t");
+                        }
+                        fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
+                        line = fileContent.ToString();
+                        
+                        length = line.Length;
+                        
+                        // Add size of newlines
+                        //total += Environment.NewLine.Length;
+
+                        if (total + length >= blockSize)
+                        {
+                            // write the block size
+                            writer.Write(fileContent.ToString());
+                            num++;
+                            total = 0;
+                            fileContent.Clear();
+                            Console.WriteLine("Block {num} is pushed");
+                        }
+                        // Add length of line in bytes to running size
+                        else total += length;
+                    }
+                    if(fileContent.ToString().Length>0)
+                    {
+                        writer.Write(fileContent.ToString());
+                        num++;
+                        total = 0;
+                        Console.WriteLine("Block {num} is pushed");
+                    }
+                }
+            }
         }
         static void UploadDataTableUsingAppend(DataTable dataTable)
         {
