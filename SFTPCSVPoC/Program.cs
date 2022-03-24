@@ -7,6 +7,7 @@ using System.Data;
 using System.Text;
 using Newtonsoft.Json;
 using System.Linq;
+using Renci.SshNet.Common;
 
 namespace SFTPCSVPoC
 {
@@ -17,22 +18,25 @@ namespace SFTPCSVPoC
         static string password = ConfigurationManager.AppSettings.Get("Pass");
         static string workingdirectory = ConfigurationManager.AppSettings.Get("WorkingDirectory");
         static int Port = Convert.ToInt32(ConfigurationManager.AppSettings.Get("Port"));
-        static string uploadfile = @"D:\Projects\SFTP\tsv_on_the_server.txt";
-
+        static string uploadfile = @"E:\Projects\SFTP\tsv_on_the_server.txt";
+        static int retryCount = Convert.ToInt32(ConfigurationManager.AppSettings.Get("RetryCount"));
         //1) Read data from a database table into a dataTable
-        static string data = File.ReadAllText(@"D:\Projects\SFTP\db_data.json");
+        static string data = File.ReadAllText(@"E:\Projects\SFTP\db_data.json");
         static void Main(string[] args)
         {
-            var data = File.ReadAllText(@"D:\Projects\SFTP\db_data.json");
+            var data = File.ReadAllText(@"E:\Projects\SFTP\db_data.json");
             DataTable dataTable = (DataTable)JsonConvert.DeserializeObject(data, (typeof(DataTable)));
 
+            UploadCompleteTSV();
+
             UploadDataTableUsingAppendByBlock(dataTable, 1);
-            UploadDataTableUsingAppend(dataTable);
+            
+            //UploadDataTableUsingAppend(dataTable);
 
             //UploadTSVMemoryStreamInc();
 
-            //UploadCompleteTSV();
-            
+            //
+
 
         }
         public static void UploadDataTableUsingAppendByBlock(DataTable dataTable, int blockSize = 1) //size in Mbs
@@ -40,136 +44,244 @@ namespace SFTPCSVPoC
             blockSize *= 1024; //1024 * 1024;  //1 MB size
             int total = 0;
             int num = 0;
+            int run = 0;
+            bool uploadSuccessFlag = false;
 
-            using (var sftpClient = new SftpClient(host, Port, username, password))
+            do
             {
-                sftpClient.Connect();
-                StringBuilder fileContent = new StringBuilder();
-                using (StreamWriter writer = sftpClient.AppendText(workingdirectory + "TestFile.txt"))
+                try
                 {
-                    foreach (var col in dataTable.Columns)
+                    using (var sftpClient = new SftpClient(host, Port, username, password))
                     {
-                        fileContent.Append(col.ToString() + "\t");
-                    }
-
-                    fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
-                    // Add size of newlines
-                    //total += Environment.NewLine.Length;
-
-                    string line = fileContent.ToString();
-                    
-                    int length = line.Length;
-
-                    if (total + length >= blockSize)
-                    {
-                        // write the block size
-                        writer.Write(fileContent.ToString());
-                        num++;
-                        total = 0;
-                        fileContent.Clear();
-                    }
-
-                    else total += length;
-
-                    foreach (DataRow dr in dataTable.Rows)
-                    {
-                        foreach (var column in dr.ItemArray)
+                        try
                         {
-                            fileContent.Append("\"" + column.ToString() + "\"\t");
-                        }
-                        fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
-                        line = fileContent.ToString();
-                        
-                        length = line.Length;
-                        
-                        // Add size of newlines
-                        //total += Environment.NewLine.Length;
+                            sftpClient.Connect();
+                            StringBuilder fileContent = new StringBuilder();
+                            using (StreamWriter writer = sftpClient.AppendText(workingdirectory + "TestFile.txt"))
+                            {
 
-                        if (total + length >= blockSize)
-                        {
-                            // write the block size
-                            writer.Write(fileContent.ToString());
-                            num++;
-                            total = 0;
-                            fileContent.Clear();
-                            Console.WriteLine("Block {num} is pushed");
+                                foreach (var col in dataTable.Columns)
+                                {
+                                    fileContent.Append(col.ToString() + "\t");
+                                }
+
+                                fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
+                        
+                                string line = fileContent.ToString();
+
+                                int length = line.Length;
+                                
+                                if (total + length >= blockSize)
+                                {
+                                    bool writeFlag = false;
+                                    do
+                                    {
+                                        try
+                                        {
+                                            // write the block size
+                                            writer.Write(fileContent.ToString());
+                                            num++;
+                                            total = 0;
+                                            fileContent.Clear();
+                                            writeFlag = true;
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            writeFlag = false;
+                                            Console.WriteLine("Exception: " + ex.Message);
+                                            run++;
+                                        }
+                                    } while (run < retryCount && !writeFlag);
+
+                                    if(run == retryCount)
+                                        throw new Exception("Retry count reached");
+                                }
+
+                                else total += length;
+
+                                foreach (DataRow dr in dataTable.Rows)
+                                {
+                                    foreach (var column in dr.ItemArray)
+                                    {
+                                        fileContent.Append("\"" + column.ToString() + "\"\t");
+                                    }
+                                    fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
+                                    line = fileContent.ToString();
+
+                                    length = line.Length;
+
+                                    if (total + length >= blockSize)
+                                    {
+                                        bool writeFlag = false;
+                                        do
+                                        {
+                                            try
+                                            {
+                                                // write the block size
+                                                writer.Write(fileContent.ToString());
+                                                num++;
+                                                total = 0;
+                                                fileContent.Clear();
+                                                Console.WriteLine("Block {num} is pushed");
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                writeFlag = false;
+                                            }
+                                        } while (run < retryCount && !writeFlag);
+
+                                        if (run == retryCount)
+                                            throw new Exception("Retry count reached");
+                                    }
+                                    // Add length of line in bytes to running size
+                                    else total += length;
+                                }
+                                if (fileContent.ToString().Length > 0)
+                                {
+                                    writer.Write(fileContent.ToString());
+                                    num++;
+                                    total = 0;
+                                    Console.WriteLine("Block {num} is pushed");
+                                }
+                                uploadSuccessFlag = true;
+                            }
                         }
-                        // Add length of line in bytes to running size
-                        else total += length;
+                        catch (Exception ex)
+                        {
+                            uploadSuccessFlag = false; 
+                            sftpClient.Disconnect();
+                            throw new Exception($"{ex.Message} {ex.InnerException}");
+                        }
+                        finally
+                        {
+                            sftpClient.Disconnect();
+                        }
                     }
-                    if(fileContent.ToString().Length>0)
-                    {
-                        writer.Write(fileContent.ToString());
-                        num++;
-                        total = 0;
-                        Console.WriteLine("Block {num} is pushed");
-                    }
+                }catch (Exception ex)
+                {
+                    uploadSuccessFlag = false;
+                    run++;
                 }
-            }
+            } while (run<retryCount && !uploadSuccessFlag);
+
         }
+        
         static void UploadDataTableUsingAppend(DataTable dataTable)
         {
 
             using (var sftpClient = new SftpClient(host, Port, username, password))
             {
-                sftpClient.Connect();
-                StringBuilder fileContent = new StringBuilder();
-                using (StreamWriter writer = sftpClient.AppendText(workingdirectory + "TestFile.txt"))
+                try
                 {
-                    foreach (var col in dataTable.Columns)
+                    sftpClient.Connect();
+                    StringBuilder fileContent = new StringBuilder();
+                    using (StreamWriter writer = sftpClient.AppendText(workingdirectory + "TestFile.txt"))
                     {
-                        fileContent.Append(col.ToString() + "\t");
-                    }
-
-                    fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
-                    writer.WriteLine(fileContent.ToString());
-                    
-                    fileContent.Clear();
-
-                    foreach (DataRow dr in dataTable.Rows)
-                    {
-                        foreach (var column in dr.ItemArray)
+                        foreach (var col in dataTable.Columns)
                         {
-                            fileContent.Append("\"" + column.ToString() + "\"\t");
+                            fileContent.Append(col.ToString() + "\t");
                         }
 
                         fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
                         writer.WriteLine(fileContent.ToString());
+
                         fileContent.Clear();
+
+                        foreach (DataRow dr in dataTable.Rows)
+                        {
+                            foreach (var column in dr.ItemArray)
+                            {
+                                fileContent.Append("\"" + column.ToString() + "\"\t");
+                            }
+
+                            fileContent.Replace("\t", System.Environment.NewLine, fileContent.Length - 1, 1);
+                            writer.WriteLine(fileContent.ToString());
+                            fileContent.Clear();
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    sftpClient.Disconnect();
+                    throw new Exception($"{ex.Message} {ex.InnerException}");
+                }
+                finally
+                {
+                    sftpClient.Disconnect();
                 }
             }
         }
+
         static void UploadCompleteTSV()
         {
             //1) Read data from a database table into a dataTable
-            var data = File.ReadAllText(@"D:\Projects\SFTP\db_data.json");
+            var data = File.ReadAllText(@"E:\Projects\SFTP\db_data.json");
             DataTable dataTable = (DataTable)JsonConvert.DeserializeObject(data, (typeof(DataTable)));
 
             //2) Format into TSV format, not writing it
             var tsvContent = dataTable.WriteToTSFFormat();
+            UploadCompleteTSVInner(tsvContent);
+        }
+
+        static void UploadCompleteTSVInner(string tsvContent)
+        {
             Console.WriteLine("Creating client and connecting");
-            using (var sftpClient = new SftpClient(host, Port, username, password))
+            bool uploadSuccessFlag = true;
+            int run = 0;
+            do
             {
-                sftpClient.Connect();
-                Console.WriteLine("Connected to {0}", host);
-
-                sftpClient.BufferSize = 4 * 1024; // bypass Payload error large files
-                using (MemoryStream ms = new MemoryStream())
+                try
                 {
-                    byte[] bytes = Encoding.ASCII.GetBytes(tsvContent);
-                    ms.Write(bytes, 0, bytes.Length);
-                    Console.WriteLine("Position is: " + ms.Position);
-                    // Reset the pointer
-                    ms.Seek(0, SeekOrigin.Begin);
-                    ms.Position = 0;
-                    Console.WriteLine("uploading stream");
-                    //3) Upload the code to SFTP server
-                    sftpClient.UploadFile(ms, Path.GetFileName(uploadfile));
-                    Console.WriteLine("Upload successful");
-                }
+                    using (var sftpClient = new SftpClient(host, Port, username, password))
+                    {
+                        try
+                        {
+                            sftpClient.Connect();
+                            Console.WriteLine("Connected to {0}", host);
 
-            }
+                            sftpClient.BufferSize = 4 * 1024; // bypass Payload error large files
+                            using (MemoryStream ms = new MemoryStream())
+                            {
+                                byte[] bytes = Encoding.ASCII.GetBytes(tsvContent);
+                                ms.Write(bytes, 0, bytes.Length);
+                                Console.WriteLine("Position is: " + ms.Position);
+                                // Reset the pointer
+                                ms.Seek(0, SeekOrigin.Begin);
+                                ms.Position = 0;
+                                Console.WriteLine("uploading stream");
+                                //3) Upload the code to SFTP server
+                                sftpClient.UploadFile(ms, Path.GetFileName(uploadfile));
+                                Console.WriteLine("Upload successful");
+                            }
+
+                            uploadSuccessFlag = true;
+
+                        }
+                        catch (Exception ex)
+                        {
+                            uploadSuccessFlag = false;
+                            sftpClient.Disconnect();
+                            throw new Exception($"{ex.Message} {ex.InnerException}");
+                        }
+                        finally
+                        {
+                            sftpClient.Disconnect();
+                        }
+                        
+                    }
+
+                }
+                catch (SshException ex)
+                {
+                    Console.WriteLine("SshException:" + ex.Message);
+                    run++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Exception:"+ex.Message);
+                    run++;
+                }
+            } while (run < retryCount && !uploadSuccessFlag);
         }
 
         static void UploadTSVMemoryStreamInc()
