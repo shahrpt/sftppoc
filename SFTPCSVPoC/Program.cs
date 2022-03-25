@@ -78,6 +78,7 @@ namespace SFTPCSVPoC
                                     {
                                         try
                                         {
+                                            sftpClient.ConnectionInfo.RetryAttempts = retryCount;
                                             // write the block size
                                             writer.Write(fileContent.ToString());
                                             num++;
@@ -246,9 +247,11 @@ namespace SFTPCSVPoC
                 {
                     using (var sftpClient = new SftpClient(host, Port, username, password))
                     {
+                        
                         try
                         {
                             sftpClient.Connect();
+                            sftpClient.ErrorOccurred += SftpClient_ErrorOccurred;
                             Console.WriteLine("Connected to {0}", host);
 
                             sftpClient.BufferSize = 4 * 1024; // bypass Payload error large files
@@ -262,8 +265,11 @@ namespace SFTPCSVPoC
                                 ms.Position = 0;
                                 Console.WriteLine("uploading stream");
                                 //3) Upload the code to SFTP server
-                                sftpClient.UploadFile(ms, Path.GetFileName(uploadfile));
-                                Console.WriteLine("Upload successful");
+                                sftpClient.UploadFile(ms, Path.GetFileName(uploadfile), uploaded =>
+                                {
+                                    Console.WriteLine($"Uploaded {(double)uploaded / ms.Length * 100}% of the file.");
+                                });
+                                Console.WriteLine($"{uploadfile} Upload successful");
                             }
 
                             uploadSuccessFlag = true;
@@ -302,6 +308,11 @@ namespace SFTPCSVPoC
                     Console.WriteLine($"Upload successful after retryCount:{retryCount}");
                 }
             } while (run < retryCount && !uploadSuccessFlag);
+        }
+        
+        private static void SftpClient_ErrorOccurred(object sender, ExceptionEventArgs e)
+        {
+            Console.WriteLine(e.ToString());
         }
 
         static void UploadTSVMemoryStreamInc()
