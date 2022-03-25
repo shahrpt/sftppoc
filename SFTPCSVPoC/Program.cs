@@ -27,7 +27,7 @@ namespace SFTPCSVPoC
             var data = File.ReadAllText(@"E:\Projects\SFTP\db_data.json");
             DataTable dataTable = (DataTable)JsonConvert.DeserializeObject(data, (typeof(DataTable)));
 
-            UploadCompleteTSV();
+            //UploadCompleteTSV();
 
             UploadDataTableUsingAppendByBlock(dataTable, 1);
             
@@ -93,8 +93,8 @@ namespace SFTPCSVPoC
                                         }
                                     } while (run < retryCount && !writeFlag);
 
-                                    if(run == retryCount)
-                                        throw new Exception("Retry count reached");
+                                    if(run >= retryCount)
+                                        throw new Exception($"{run}: retry count finished");
                                 }
 
                                 else total += length;
@@ -127,10 +127,12 @@ namespace SFTPCSVPoC
                                             catch (Exception ex)
                                             {
                                                 writeFlag = false;
+                                                Console.WriteLine("Exception: " + ex.Message);
+                                                run++;
                                             }
                                         } while (run < retryCount && !writeFlag);
 
-                                        if (run == retryCount)
+                                        if (run >= retryCount)
                                             throw new Exception("Retry count reached");
                                     }
                                     // Add length of line in bytes to running size
@@ -159,11 +161,21 @@ namespace SFTPCSVPoC
                     }
                 }catch (Exception ex)
                 {
+                    Console.WriteLine("Exception:"+ex.Message);
                     uploadSuccessFlag = false;
                     run++;
                 }
+                if (run < retryCount && !uploadSuccessFlag)
+                {
+                    Console.WriteLine($"Try #{run}: trying again");
+                }
+                else if (run >= retryCount && uploadSuccessFlag)
+                {
+                    Console.WriteLine($"Upload successful after retryCount:{retryCount}");
+                }
             } while (run<retryCount && !uploadSuccessFlag);
-
+            if(!uploadSuccessFlag)
+                Console.WriteLine("Transfer failed");
         }
         
         static void UploadDataTableUsingAppend(DataTable dataTable)
@@ -225,7 +237,7 @@ namespace SFTPCSVPoC
 
         static void UploadCompleteTSVInner(string tsvContent)
         {
-            Console.WriteLine("Creating client and connecting");
+            Console.WriteLine("UploadCompleteTSVInner: Creating client and connecting");
             bool uploadSuccessFlag = true;
             int run = 0;
             do
@@ -278,8 +290,16 @@ namespace SFTPCSVPoC
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Exception:"+ex.Message);
+                    Console.WriteLine("Exception:" + ex.Message);
                     run++;
+                }
+                if(run < retryCount && !uploadSuccessFlag)
+                {
+                    Console.WriteLine($"Try #{run}: trying again");
+                }
+                else if(run == retryCount && uploadSuccessFlag)
+                {
+                    Console.WriteLine($"Upload successful after retryCount:{retryCount}");
                 }
             } while (run < retryCount && !uploadSuccessFlag);
         }
